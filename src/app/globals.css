@@ -137,3 +137,54 @@
 .animate-pulse-dot {
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
+
+/* ── uPlot legend: wrap instead of overflowing the chart card ─────────── */
+/*
+ * uPlot's default renders the legend as a <table>, which doesn't reflow when
+ * the series list is wider than the card. We force the table to behave like
+ * a flex container so each series wraps onto a new line when it runs out of
+ * room, and tighten the typography to match the rest of the app.
+ */
+.u-legend {
+  max-width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #a1a1aa;
+  margin-top: 6px !important;
+  text-align: left !important;
+}
+.u-legend table,
+.u-legend tbody {
+  display: block;
+  max-width: 100%;
+}
+.u-legend tbody {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: 14px;
+  row-gap: 2px;
+}
+.u-legend tr {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 !important;
+  padding: 0;
+  white-space: nowrap;
+}
+.u-legend tr.u-off > * {
+  opacity: 0.35;
+}
+.u-legend th, .u-legend td {
+  display: inline-block;
+  padding: 0 !important;
+  border: none;
+}
+.u-legend th > .u-marker {
+  margin-right: 4px;
+}
+.u-legend .u-value {
+  color: #e4e4e7;
+  margin-left: 4px;
+}

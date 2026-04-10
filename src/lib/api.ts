@@ -146,6 +146,38 @@ export async function deleteResult(hypothesisId: string, resultId: string): Prom
   return request<void>(`/api/hypothesis/${hypothesisId}/results/${resultId}`, { method: "DELETE" });
 }
 
+// --- Adapter metrics (scraped from the Java SDK's Prometheus exporter) ---
+
+export interface MetricSeries {
+  labels: Record<string, string>;
+  /** time-ordered [ts_ms, value] pairs */
+  points: [number, number][];
+}
+
+export interface MetricGroup {
+  name: string;
+  series: MetricSeries[];
+}
+
+export interface MetricsResponse {
+  hypothesis_id: string;
+  run_id: string;
+  metrics: MetricGroup[];
+}
+
+export async function getMetrics(
+  hypothesisId: string,
+  runId?: string,
+  since?: number,
+): Promise<MetricsResponse> {
+  const params = new URLSearchParams();
+  if (runId) params.set("run_id", runId);
+  if (since !== undefined) params.set("since", String(since));
+  const qs = params.toString();
+  const path = `/api/hypothesis/${hypothesisId}/metrics${qs ? `?${qs}` : ""}`;
+  return request<MetricsResponse>(path);
+}
+
 export async function downloadBundle(id: string): Promise<void> {
   const res = await fetch(`/api/hypothesis/${id}/bundle`);
   if (!res.ok) throw new Error(`API ${res.status}`);

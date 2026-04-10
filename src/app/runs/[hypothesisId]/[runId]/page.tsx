@@ -9,8 +9,9 @@ import { StatusBadge } from "@/components/status-badge";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import type { Hypothesis, StatusResponse, RunResult } from "@/lib/api";
-import { getHypothesis, getStatus, getEvents, getResults, stopRun, downloadBundle, deleteResult } from "@/lib/api";
+import type { Hypothesis, StatusResponse, RunResult, MetricsResponse, MetricSeries } from "@/lib/api";
+import { getHypothesis, getStatus, getEvents, getResults, stopRun, downloadBundle, deleteResult, getMetrics } from "@/lib/api";
+import { MetricChart, type PlotSeries } from "@/components/metric-chart";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeftIcon, SquareIcon, DownloadIcon, Trash2Icon,
@@ -40,7 +41,12 @@ export default function RunDetailPage({
   const [status, setStatus] = useState<StatusResponse | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
   const [events, setEvents] = useState<EventItem[]>([]);
-  const [tab, setTab] = useState<"stats" | "events">("stats");
+  const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
+  const [tab, setTab] = useState<"stats" | "events" | "metrics">("stats");
+  // Grafana-style shared window. `null` means the whole hypothesis run;
+  // otherwise `[fromMs, toMs]` drives the x-axis of every chart. Updated by
+  // drag-select on any chart; double-click on a chart clears it.
+  const [customRange, setCustomRange] = useState<[number, number] | null>(null);
   const [downloading, setDownloading] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -48,14 +54,18 @@ export default function RunDetailPage({
 
   const loadData = useCallback(async () => {
     try {
-      const [h, s, evText, results] = await Promise.all([
+      // Fetch every sample for this run; the range picker happens client-side
+      // so drag-zooming is instant instead of triggering refetches.
+      const [h, s, evText, results, m] = await Promise.all([
         getHypothesis(hypothesisId),
         getStatus(hypothesisId),
         getEvents(hypothesisId).catch(() => ""),
         getResults(hypothesisId).catch(() => []),
+        getMetrics(hypothesisId, runId).catch(() => null),
       ]);
       setHypothesis(h);
       setStatus(s);
+      if (m) setMetrics(m);
 
       // Find this run's result
       const thisResult = results.find((r) => r.run_id === runId);
@@ -132,6 +142,25 @@ export default function RunDetailPage({
   const checkFailed = progress?.failed_checkpoints ?? result?.failed_checkpoints ?? 0;
   const failures = progress?.safety_violations ?? result?.safety_violations ?? 0;
 
+  // Hypothesis run time window (ms). For a running run we extrapolate from
+  // elapsed_secs because the status endpoint doesn't report a started_at.
+  const runEndMs =
+    result?.finished_at != null
+      ? Date.parse(result.finished_at)
+      : Date.now();
+  const runStartMs =
+    result?.started_at != null
+      ? Date.parse(result.started_at)
+      : isRunning
+        ? Date.now() - elapsed * 1000
+        : runEndMs;
+
+  // Effective `[from, to]` for the metrics tab. Starts as the full run
+  // window; drag-selecting on any chart narrows it, double-clicking any chart
+  // resets it back to the full run.
+  const effectiveFrom = customRange ? customRange[0] : runStartMs;
+  const effectiveTo   = customRange ? customRange[1] : runEndMs;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -195,6 +224,12 @@ export default function RunDetailPage({
           Details
         </button>
         <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === "metrics" ? "border-blue-500 text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
+          onClick={() => setTab("metrics")}
+        >
+          Metrics{metrics ? ` (${metrics.metrics.length})` : ""}
+        </button>
+        <button
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${tab === "events" ? "border-blue-500 text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}
           onClick={() => setTab("events")}
         >
@@ -217,6 +252,17 @@ export default function RunDetailPage({
             </div>
           </div>
         </div>
+      )}
+
+      {tab === "metrics" && (
+        <MetricsTab
+          metrics={metrics}
+          xMin={effectiveFrom}
+          xMax={effectiveTo}
+          isCustomRange={customRange != null}
+          onRangeSelect={(fromMs, toMs) => setCustomRange([fromMs, toMs])}
+          onRangeReset={() => setCustomRange(null)}
+        />
       )}
 
       {tab === "events" && (
@@ -405,4 +451,187 @@ function eventSummary(ev: EventItem): string {
   if (ev.stop_reason) parts.push(`reason=${ev.stop_reason}`);
   if (ev.error) parts.push(`error=${ev.error}`);
   return parts.join(" | ") || "-";
+}
+
+// ── Metrics tab ──────────────────────────────────────────────────────────
+//
+// The pilot scrapes the Java SDK's Prometheus exporter and stores one sample
+// per series per scrape. Here we turn those raw samples into chart-friendly
+// panels rendered with uPlot:
+//   - Ops / sec         — rate of regret_adapter_op_total by op_type
+//   - P50 op latency    — from regret_adapter_op_duration_seconds_p50
+//   - P99 op latency    — from regret_adapter_op_duration_seconds_p99
+//   - gRPC errors / sec — rate of regret_adapter_grpc_errors_total by method
+//
+// P50/P95/P99 are computed server-side in pilot/src/api/metrics.rs via
+// histogram_quantile on the stored `_bucket` samples, so the frontend only
+// has to plot them directly.
+
+function formatRange(fromMs: number, toMs: number): string {
+  const sameDay = new Date(fromMs).toDateString() === new Date(toMs).toDateString();
+  const opts: Intl.DateTimeFormatOptions = sameDay
+    ? { hour: "2-digit", minute: "2-digit", second: "2-digit" }
+    : { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" };
+  return `${new Date(fromMs).toLocaleString(undefined, opts)} → ${new Date(toMs).toLocaleString(undefined, opts)}`;
+}
+
+function MetricsTab({
+  metrics,
+  xMin,
+  xMax,
+  isCustomRange,
+  onRangeSelect,
+  onRangeReset,
+}: {
+  metrics: MetricsResponse | null;
+  xMin: number;
+  xMax: number;
+  isCustomRange: boolean;
+  onRangeSelect: (fromMs: number, toMs: number) => void;
+  onRangeReset: () => void;
+}) {
+  if (!metrics) {
+    return <p className="text-zinc-500 text-center py-8 text-sm">Loading metrics…</p>;
+  }
+  const hasAny = metrics.metrics.some((m) => m.series.some((s) => s.points.length > 0));
+
+  const byName: Record<string, MetricSeries[]> = Object.fromEntries(
+    metrics.metrics.map((g) => [g.name, g.series]),
+  );
+
+  const opsRate = groupByLabel(byName["regret_adapter_op_total"] ?? [], "op_type")
+    .map((s) => ({ label: s.label, points: rateOfCounter(s.points) }))
+    .filter((s) => s.points.length > 0);
+
+  const opP50 = seriesToPlot(byName["regret_adapter_op_duration_seconds_p50"] ?? [], "op_type");
+  const opP99 = seriesToPlot(byName["regret_adapter_op_duration_seconds_p99"] ?? [], "op_type");
+
+  const errRate = groupByLabel(byName["regret_adapter_grpc_errors_total"] ?? [], "method")
+    .map((s) => ({ label: s.label, points: rateOfCounter(s.points) }))
+    .filter((s) => s.points.length > 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <span className="font-mono text-zinc-400">{formatRange(xMin, xMax)}</span>
+        {isCustomRange ? (
+          <button
+            type="button"
+            onClick={onRangeReset}
+            className="px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-zinc-100"
+            title="Reset the shared range to the full run"
+          >
+            Reset range
+          </button>
+        ) : (
+          <span className="text-zinc-600">drag on any chart to zoom · double-click to reset</span>
+        )}
+      </div>
+
+      {!hasAny ? (
+        <p className="text-zinc-500 text-center py-8 text-sm">No metrics in this window.</p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <ChartCard title="Ops / sec"         subtitle="regret_adapter_op_total (by op_type)"                series={opsRate} unit="/s" xMin={xMin} xMax={xMax} onRangeSelect={onRangeSelect} onRangeReset={onRangeReset} />
+          <ChartCard title="P50 op latency"    subtitle="regret_adapter_op_duration_seconds p50 (by op_type)" series={opP50}   unit="s"  xMin={xMin} xMax={xMax} onRangeSelect={onRangeSelect} onRangeReset={onRangeReset} />
+          <ChartCard title="P99 op latency"    subtitle="regret_adapter_op_duration_seconds p99 (by op_type)" series={opP99}   unit="s"  xMin={xMin} xMax={xMax} onRangeSelect={onRangeSelect} onRangeReset={onRangeReset} />
+          <ChartCard title="gRPC errors / sec" subtitle="regret_adapter_grpc_errors_total (by method)"        series={errRate} unit="/s" xMin={xMin} xMax={xMax} onRangeSelect={onRangeSelect} onRangeReset={onRangeReset} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ChartCard({
+  title,
+  subtitle,
+  series,
+  unit,
+  xMin,
+  xMax,
+  onRangeSelect,
+  onRangeReset,
+}: {
+  title: string;
+  subtitle: string;
+  series: PlotSeries[];
+  unit: string;
+  xMin?: number;
+  xMax?: number;
+  onRangeSelect?: (fromMs: number, toMs: number) => void;
+  onRangeReset?: () => void;
+}) {
+  // `min-w-0` is critical: CSS grid items default to `min-width: auto`, which
+  // lets a wide legend push the whole card past its grid cell.
+  return (
+    <div className="min-w-0 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+      <div className="mb-2">
+        <h3 className="text-sm font-semibold text-zinc-200">{title}</h3>
+        <p className="text-xs text-zinc-500 font-mono">{subtitle}</p>
+      </div>
+      <MetricChart
+        series={series}
+        unit={unit}
+        height={200}
+        xMin={xMin}
+        xMax={xMax}
+        onRangeSelect={onRangeSelect}
+        onRangeReset={onRangeReset}
+      />
+    </div>
+  );
+}
+
+// ── Data shaping helpers ─────────────────────────────────────────────────
+
+// Group a list of (counter) series by a single label key, summing values of
+// series that share the same value of that key across any other labels.
+function groupByLabel(series: MetricSeries[], labelKey: string): PlotSeries[] {
+  const buckets = new Map<string, Map<number, number>>();
+  for (const s of series) {
+    const label = s.labels[labelKey] || "—";
+    let agg = buckets.get(label);
+    if (!agg) {
+      agg = new Map();
+      buckets.set(label, agg);
+    }
+    for (const [ts, v] of s.points) {
+      agg.set(ts, (agg.get(ts) ?? 0) + v);
+    }
+  }
+  return Array.from(buckets.entries())
+    .map(([label, m]) => ({
+      label,
+      points: Array.from(m.entries()).sort((a, b) => a[0] - b[0]) as [number, number][],
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// Compute per-second rate from a monotonic counter series. Counter resets are
+// treated as a zero delta so a single bad scrape doesn't pull the series down.
+function rateOfCounter(points: [number, number][]): [number, number][] {
+  if (points.length < 2) return [];
+  const out: [number, number][] = [];
+  for (let i = 1; i < points.length; i++) {
+    const [t0, v0] = points[i - 1];
+    const [t1, v1] = points[i];
+    const dtSec = (t1 - t0) / 1000;
+    if (dtSec <= 0) continue;
+    const dv = Math.max(0, v1 - v0);
+    out.push([t1, dv / dtSec]);
+  }
+  return out;
+}
+
+// Convert raw API series into PlotSeries, grouping by `labelKey` (e.g. op_type)
+// and passing values through unchanged. Used for pre-computed percentile groups
+// where the server already did the math.
+function seriesToPlot(series: MetricSeries[], labelKey: string): PlotSeries[] {
+  return series
+    .map((s) => ({
+      label: s.labels[labelKey] || "—",
+      points: s.points.slice().sort((a, b) => a[0] - b[0]) as [number, number][],
+    }))
+    .filter((s) => s.points.length > 0)
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
