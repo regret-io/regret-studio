@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
 interface AuthState {
   isAdmin: boolean;
@@ -19,12 +19,10 @@ const AuthContext = createContext<AuthState>({
 const STORAGE_KEY = "regret_admin_password";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [password, setPassword] = useState<string | null>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) setPassword(stored);
-  }, []);
+  const [password, setPassword] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(STORAGE_KEY);
+  });
 
   const login = useCallback((pw: string) => {
     localStorage.setItem(STORAGE_KEY, pw);

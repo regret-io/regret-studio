@@ -6,9 +6,6 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/status-badge";
-import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-} from "@/components/ui/table";
 import type { Hypothesis, StatusResponse, RunResult, MetricsResponse, MetricSeries } from "@/lib/api";
 import { getHypothesis, getStatus, getEvents, getResults, stopRun, downloadBundle, deleteResult, getMetrics } from "@/lib/api";
 import { MetricChart, type PlotSeries } from "@/components/metric-chart";
@@ -307,7 +304,7 @@ function EventRow({ ev }: { ev: EventItem }) {
   return (
     <div>
       <div
-        className={`flex items-center gap-3 px-3 py-2 text-xs ${expandable ? "cursor-pointer hover:bg-zinc-800/50" : ""} ${ev.type === "SafetyViolation" ? "bg-red-500/5" : ""} ${ev.type === "Checkpoint" && ev.passed === false ? "bg-red-500/5" : ""}`}
+        className={`flex items-center gap-3 px-3 py-2 text-xs ${expandable ? "cursor-pointer hover:bg-zinc-800/50" : ""} ${ev.type === "SafetyViolation" ? "bg-red-500/15 border-l-2 border-red-500" : ""} ${ev.type === "Checkpoint" && ev.passed === false ? "bg-red-500/10 border-l-2 border-red-500" : ""}`}
         onClick={() => expandable && setExpanded(!expanded)}
       >
         <span className="font-mono text-zinc-500 w-[75px] shrink-0">

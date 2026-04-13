@@ -40,7 +40,6 @@ import {
   deleteHypothesis,
   getResults,
   getStatus,
-  stopRun,
   updateHypothesis,
   listGenerators,
   listAdapters,

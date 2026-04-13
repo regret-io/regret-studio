@@ -35,12 +35,6 @@ const OPERATION_TYPES = [
   "list",
   "range_scan",
   "cas",
-  "ephemeral_put",
-  "indexed_put",
-  "indexed_get",
-  "indexed_list",
-  "indexed_range_scan",
-  "sequence_put",
 ] as const;
 
 export default function GeneratorsPage() {

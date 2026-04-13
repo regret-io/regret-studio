@@ -49,7 +49,7 @@ export default function ChaosScenariosPage() {
     try {
       const data = await listChaosScenarios();
       setScenarios(data);
-    } catch (e: unknown) {
+    } catch {
       toast.error("Failed to load scenarios");
     } finally {
       setLoading(false);

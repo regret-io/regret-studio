@@ -168,7 +168,11 @@ export function MetricChart({
           grid: { stroke: "#27272a", width: 1 },
           ticks: { stroke: "#3f3f46", width: 1 },
           font: "11px ui-monospace, SFMono-Regular, Menlo, monospace",
-          size: 60,
+          size: (self, values) => {
+            if (!values || values.length === 0) return 60;
+            const maxLen = Math.max(...values.map((v) => String(v).length));
+            return Math.max(60, maxLen * 8 + 12);
+          },
           values: (_u, splits) => splits.map((v) => formatValue(v, unit)),
         },
       ],

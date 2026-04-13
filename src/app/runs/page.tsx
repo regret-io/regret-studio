@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import type { Hypothesis, RunResult, StatusResponse, ProgressInfo } from "@/lib/api";
+import type { StatusResponse, ProgressInfo } from "@/lib/api";
 import { listHypotheses, getResults, getStatus } from "@/lib/api";
 import { Loader2Icon } from "lucide-react";
 
